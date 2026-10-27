@@ -9,6 +9,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -467,9 +468,14 @@ class NebiusOrchestrator:
 
 
 class CreateJobRequest(BaseModel):
+    leaderboard_metadata: dict | None = Field(
+        None, description="Optional overrides for automatically collected job metadata; reused on resume"
+    )
     job_name: str = Field(..., description="Name to give the job")
     agent: SupportedAgent = Field(..., description="Agent to use")
-    dataset: str = Field(..., description="Dataset name or path")
+    dataset: str = Field(
+        ..., description="Harbor dataset name@version (e.g. org/dataset@v1.0) or local path"
+    )
     model_name: str = Field(..., description="Model name")
     server_url: str = Field(..., description="Model server URL; 'nebius-<resource>' (e.g. nebius-h200) for managed Nebius instances; or 'openrouter' to use OpenRouter (requires OPENROUTER_API_KEY on the server)")
     dataset_pattern: Optional[str] = Field(None, description="Pattern to filter dataset tasks")
@@ -496,6 +502,15 @@ class CreateJobRequest(BaseModel):
         max_length=256,
         description="Stable key used to safely retry creation of the same job",
     )
+
+    @field_validator("leaderboard_metadata")
+    @classmethod
+    def validate_leaderboard_metadata_environment(cls, value: dict | None) -> dict | None:
+        if value is not None:
+            for section, section_value in value.items():
+                if not isinstance(section_value, dict):
+                    raise ValueError(f"leaderboard_metadata.{section} must be an object")
+        return value
 
     @field_validator("extra_harbor_flags")
     @classmethod
@@ -2118,6 +2133,15 @@ def build_cli_command(req: CreateJobRequest):
         command += ["--before-script", req.before_script]
     if req.agent_version:
         command += ["--agent-version", req.agent_version]
+    leaderboard_metadata = deepcopy(req.leaderboard_metadata or {})
+    gpu_config = _parse_nebius_url(req.server_url)
+    if gpu_config is not None:
+        resource = RESOURCE_CONFIG_REGISTRY[gpu_config]
+        environment = leaderboard_metadata.setdefault("environment", {})
+        environment["gpu_type"] = resource.gpu_type
+        environment["gpu_count"] = resource.tensor_parallel_size
+    if leaderboard_metadata:
+        command += ["--leaderboard-metadata-json", json.dumps(leaderboard_metadata)]
     if req.max_retries is not None:
         command += ["--max-retries", str(req.max_retries)]
     if req.retry_include is not None:
@@ -2434,6 +2458,10 @@ def _build_resume_shell_command(
         " || printf 'Staging cleanup failed; canonical results are synced.\\n' >&2;"
         " fi;"
     )
+    leaderboard_step = shlex.join([
+        "uv", "run", "--no-sync", "--no-cache", "python", "-m",
+        "coding_agent_bench.leaderboard_results", "leaderboard", py_job_dir,
+    ]) + ' "$harbor_rc"'
     markers = {}
     for phase in ("original", "updated"):
         manifest = shlex.join([
@@ -2462,6 +2490,9 @@ def _build_resume_shell_command(
         f" && {markers['original']}"
         " || exit $?; "
         f"{_build_logged_shell_step(resume_command, py_job_dir)}"
+        # The restored job keeps its original metadata and candidate filename.
+        # Every resume refreshes metrics/status before uploading its checkpoint.
+        f" {leaderboard_step} || printf 'Leaderboard candidate update failed.\\n' >&2;"
         # Never touch the canonical prefix until the entire updated upload succeeds.
         f" {aws} s3 cp --recursive {job_dir}/ {updated_uri}"
         f" && {markers['updated']}"

@@ -37,6 +37,8 @@ class ResourceConfig(ABC):
     """Platform ID."""
     preset: str
     """Hardware preset."""
+    gpu_type: str
+    """GPU model used by this resource configuration."""
     tensor_parallel_size: int
     """Tensor parallel size on this hardware (= num GPUs)."""
     is_preemptible: bool
@@ -53,6 +55,7 @@ class B200(ResourceConfig):
     name = "b200"
     platform = "gpu-b200-sxm"
     preset = "1gpu-20vcpu-224gb"
+    gpu_type = "B200"
     tensor_parallel_size = 1
     is_preemptible = True
     model_concurrency = {
@@ -75,6 +78,7 @@ class B200x8(ResourceConfig):
     name = "b200x8"
     platform = "gpu-b200-sxm"
     preset = "8gpu-160vcpu-1792gb"
+    gpu_type = "B200"
     tensor_parallel_size = 8
     is_preemptible = True
     model_extra_args = {
@@ -97,6 +101,7 @@ class H200(ResourceConfig):
     name = "h200"
     platform = "gpu-h200-sxm"
     preset = "1gpu-16vcpu-200gb"
+    gpu_type = "H200"
     tensor_parallel_size = 1
     is_preemptible = True
     
@@ -105,6 +110,7 @@ class H200x8(ResourceConfig):
     name = "h200x8"
     platform = "gpu-h200-sxm"
     preset = "8gpu-128vcpu-1600gb"
+    gpu_type = "H200"
     tensor_parallel_size = 8
     is_preemptible = True
     model_concurrency = {
